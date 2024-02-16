@@ -1,7 +1,7 @@
 import os
 from mistralai.client import MistralClient
 from mistralai.models.chat_completion import ChatMessage
-from telegram import Update
+from telegram import Update, Chat,Bot, constants
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
 
 API_KEY = os.environ.get("MISTRAL_API_KEY")
@@ -13,6 +13,8 @@ model = "mistral-medium"
 
 async def handle_message(update: Update, context: CallbackContext) -> None:
     
+    await update.message.chat.send_action(action=constants.ChatAction.TYPING)
+
     messages = [
         ChatMessage(role="user", content=update.message.text)
     ]
