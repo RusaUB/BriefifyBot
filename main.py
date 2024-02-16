@@ -9,7 +9,7 @@ TOKEN = os.environ.get("TELEGRAMM_BOT_TOKEN")
 
 client = MistralClient(api_key=API_KEY)
 
-model = "mistral-tiny"
+model = "mistral-medium"
 
 async def handle_message(update: Update, context: CallbackContext) -> None:
     
@@ -17,10 +17,11 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
         ChatMessage(role="user", content=update.message.text)
     ]
     
-
     chat_response = client.chat(
         model=model,
         messages=messages,
+        safe_mode=False,
+        safe_prompt=False,
     )
 
     await update.message.reply_text(chat_response.choices[0].message.content)
