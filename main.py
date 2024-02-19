@@ -1,14 +1,13 @@
 import os
 import logging
-from time import time
-from mistralai.client import MistralClient
-from mistralai.models.chat_completion import ChatMessage
-from telegram import Update, constants, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, MessageHandler, CommandHandler, filters, CallbackContext, ApplicationHandlerStop, CallbackQueryHandler
+from telegram import Update, constants, InlineKeyboardMarkup
+from telegram.ext import Application, MessageHandler, CommandHandler, filters, CallbackContext, CallbackQueryHandler
 from utils import message_text
-from bot_conv import bot_greeting, lang_config, start_page, model_system_role, continue_text
+from bot_conv import bot_greeting, lang_config, start_page, continue_text
 
 from utils import keyboard_layout
+
+import ollama
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -19,12 +18,8 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
-API_KEY = os.environ.get("MISTRAL_API_KEY")
+
 TOKEN = os.environ.get("TELEGRAMM_BOT_TOKEN")
-
-client = MistralClient(api_key=API_KEY)
-
-model = "mistral-medium"
 
 MAX_USAGE = 1
 
@@ -56,36 +51,14 @@ async def handle_language_selection(update: Update, context: CallbackContext) ->
 
 async def handle_message(update: Update, context: CallbackContext) -> None:
     await update.message.chat.send_action(action=constants.ChatAction.TYPING)
-    count = context.user_data.get("usageCount", 0) 
-    restrict_since = context.user_data.get("restrictSince", 0)
-    if restrict_since:
-        time_left = (restrict_since + 60 * 5) - time()  # Calculate time left for restriction to expire
-        if time_left <= 0:  # If time left is negative, remove restriction
-            del context.user_data["restrictSince"]
-            del context.user_data["usageCount"]
-            await update.message.reply_text("I have unrestricted you. Please behave well.") 
-        else:
-            minutes_left = int(time_left / 60)  # Convert remaining seconds to minutes
-            await update.message.reply_text(f"Back off! Wait for your restriction to expire... Remaining time: {minutes_left} minutes")
-            raise ApplicationHandlerStop
-    else:
-        if count == MAX_USAGE:
-            context.user_data["restrictSince"] = time()
-            await update.message.reply_text("⚠️ You've used up all your free requests. Please wait for 5 minutes before trying again.") #print the remaining time
-            raise ApplicationHandlerStop
-        else:
-            context.user_data["usageCount"] = count + 1
-    messages = [
-        ChatMessage(role="system", content = message_text(language_code=context.user_data["language"], message=model_system_role)),
-        ChatMessage(role="user", content=update.message.text)
-        ]
-    chat_response = client.chat(
-        model=model,
-        messages=messages,
-        safe_mode=False,
-        safe_prompt=False,
-    )
-    await update.message.reply_text(chat_response.choices[0].message.content)
+    response = ollama.chat(model='openhermes', messages=[
+    {
+        'role': 'user',
+        'content': update.message.text,
+    },
+    ])
+    res = response['message']['content']
+    await update.message.reply_text(res)
 
 
 def main() -> None:
