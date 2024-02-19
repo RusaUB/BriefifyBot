@@ -1,10 +1,10 @@
 import os
 import logging
 from telegram import Update, constants, InlineKeyboardMarkup
-from telegram.ext import Application, MessageHandler, CommandHandler, filters, CallbackContext, CallbackQueryHandler
+from telegram.ext import Application, MessageHandler, CommandHandler, filters, CallbackContext, CallbackQueryHandler, ContextTypes
 from utils import message_text
 from bot_conv import bot_greeting, lang_config, start_page, continue_text
-
+from io import BytesIO
 from utils import keyboard_layout
 
 import ollama
@@ -60,11 +60,26 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
     res = response['message']['content']
     await update.message.reply_text(res)
 
+async def handle_photo_messages(update: Update, context: CallbackContext) -> None:
+    photo_file = await update.message.photo[-1].get_file()
+    photo_bytes = BytesIO(await photo_file.download_as_bytearray())
+    print(photo_file)
+    message = {
+        'role': 'user',
+        'content': 'Describe this image:',
+        'images': [photo_bytes]
+    }
+    response = ollama.chat(
+        model="llava",
+        messages=[message]
+    )
+    await update.message.reply_texté(response["content"])
 
 def main() -> None:
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo_messages))
     application.add_handler(CallbackQueryHandler(handle_language_selection))
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
