@@ -63,7 +63,6 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
 async def handle_photo_messages(update: Update, context: CallbackContext) -> None:
     photo_file = await update.message.photo[-1].get_file()
     photo_bytes = BytesIO(await photo_file.download_as_bytearray())
-    print(photo_file)
     message = {
         'role': 'user',
         'content': 'Describe this image:',
@@ -73,7 +72,7 @@ async def handle_photo_messages(update: Update, context: CallbackContext) -> Non
         model="llava",
         messages=[message]
     )
-    await update.message.reply_texté(response["content"])
+    await update.message.reply_text(response["message"]["content"])
 
 def main() -> None:
     application = Application.builder().token(TOKEN).build()
