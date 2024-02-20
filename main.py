@@ -50,7 +50,6 @@ async def handle_language_selection(update: Update, context: CallbackContext) ->
 
 
 async def handle_message(update: Update, context: CallbackContext) -> None:
-    await update.message.chat.send_action(action=constants.ChatAction.TYPING)
     # Initialize the text with an empty string
     edited_text = ""
     # Send the initial text
@@ -81,11 +80,17 @@ async def handle_photo_messages(update: Update, context: CallbackContext) -> Non
         'content': 'Describe this image:',
         'images': [photo_bytes]
     }
-    response = ollama.chat(
-        model="llava",
-        messages=[message]
-    )
-    await update.message.reply_text(response["message"]["content"])
+    # Send the initial text
+    text = await update.message.reply_text("...")
+    edited_text = ""
+    # Send photo message to ollama for processing
+    for part in ollama.chat(model="llava", messages=[message], stream=True):
+        edited_text += part['message']['content']
+        # Edit the text with the combined content
+        if len(edited_text) % 10 == 0:
+            await text.edit_text(edited_text)
+    if edited_text:  # If there's any remaining text
+        await text.edit_text(edited_text)
 
 def main() -> None:
     application = Application.builder().token(TOKEN).build()
