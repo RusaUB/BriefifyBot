@@ -51,14 +51,27 @@ async def handle_language_selection(update: Update, context: CallbackContext) ->
 
 async def handle_message(update: Update, context: CallbackContext) -> None:
     await update.message.chat.send_action(action=constants.ChatAction.TYPING)
-    response = ollama.chat(model='openhermes', messages=[
-    {
-        'role': 'user',
-        'content': update.message.text,
-    },
-    ])
-    res = response['message']['content']
-    await update.message.reply_text(res)
+    # Initialize the text with an empty string
+    edited_text = ""
+    # Send the initial text
+    text = await update.message.reply_text("...")
+    messages = [
+        {
+            'role': 'user',
+            'content': update.message.text,
+        },
+    ]
+    # Iterate over the parts received from ollama
+    for part in ollama.chat('openhermes', messages=messages, stream=True):
+        # Append the new part content to the previous content
+        edited_text += part['message']['content']
+        # Edit the text with the combined content
+        if len(edited_text) % 10 == 0:
+            await text.edit_text(edited_text)
+    # Edit the text with the combined content after the loop finishes
+    if edited_text:  # If there's any remaining text
+        await text.edit_text(edited_text)
+
 
 async def handle_photo_messages(update: Update, context: CallbackContext) -> None:
     photo_file = await update.message.photo[-1].get_file()
