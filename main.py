@@ -1,7 +1,7 @@
 import os
 import logging
 from telegram import Update, constants, InlineKeyboardMarkup
-from telegram.ext import Application, MessageHandler, CommandHandler, filters, CallbackContext, CallbackQueryHandler, ContextTypes, AIORateLimiter
+from telegram.ext import Application, MessageHandler, CommandHandler, filters, CallbackContext, CallbackQueryHandler, ContextTypes, AIORateLimiter, ApplicationHandlerStop
 from utils import message_text
 from bot_conv import bot_greeting, lang_config, start_page, continue_text
 from io import BytesIO
@@ -9,6 +9,11 @@ from utils import keyboard_layout
 from datetime import datetime
 import ollama
 import pandas as pd
+import time
+import asyncio
+from mistralai.async_client import MistralAsyncClient
+from mistralai.models.chat_completion import ChatMessage
+
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -26,6 +31,12 @@ SUPPORTED_LANGUAGES = ['en', 'ru', 'fr']
 GITHUB_REPO = "https://github.com/RusaUB/BriefifyBot"
 ADMIN_ID = os.environ.get("TELEGRAM_ADMIN_ID")
 
+api_key = os.environ["MISTRAL_API_KEY"]
+model = "mistral-tiny"
+
+MAX_USAGE = 1
+
+client = MistralAsyncClient(api_key=api_key)
 
 async def handle_error(update, context, error_message):
     """
@@ -67,26 +78,25 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
         # Initialize the text with an empty string
         edited_text = ""
         # Send the initial text
-        text = await update.message.reply_text("...")
-        messages = [
-            {
-                'role': 'user',
-                'content': update.message.text,
-            },
-        ]
+        text = await update.message.reply_text("🤖💬...")
+        messages = [ChatMessage(role="user", content=update.message.text)]
+        async_response = client.chat_stream(model=model, messages=messages)
         # Iterate over the parts received from ollama
-        for part in ollama.chat('openhermes', messages=messages, stream=True):
-            # Append the new part content to the previous content
-            edited_text += part['message']['content']
-            # Edit the text with the combined content
-            if len(edited_text) % 10 == 0:
-                await text.edit_text(edited_text)
-        # Edit the text with the combined content after the loop finishes
+        async for chunk in async_response:
+            content = chunk.choices[0].delta.content  # Remove leading/trailing whitespace
+            if content:  # Check if content is not empty
+                edited_text += content
+                if len(edited_text) % 50 == 0:
+                    await text.edit_text(edited_text)
         if edited_text:  # If there's any remaining text
             await text.edit_text(edited_text)
     except Exception as e:
         await update.message.reply_text("Something went wrog try again later")
         logger.error(f"Error handling message: {e}")
+
+async def handle_message_wrapper(update: Update, context: CallbackContext) -> None:
+    asyncio.create_task(handle_message(update, context))  # Вызовите вашу функцию handle_message асинхронно
+
 
 async def handle_photo_messages(update: Update, context: CallbackContext) -> None:
     try:
@@ -177,7 +187,7 @@ def main() -> None:
     application = Application.builder().rate_limiter(AIORateLimiter(overall_max_rate=0, overall_time_period=0)).token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("feedback", feedback))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message_wrapper))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo_messages))
     application.add_handler(CallbackQueryHandler(handle_language_selection))
 
