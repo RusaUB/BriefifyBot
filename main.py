@@ -85,38 +85,46 @@ def extract_status_change(chat_member_update: ChatMemberUpdated) -> Optional[Tup
 
 async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Tracks the chats the bot is in."""
+    
+    # Extract status change from update
     result = extract_status_change(update.my_chat_member)
+    
+    # Return if no status change
     if result is None:
         return
+    
+    # Get previous and current membership status
     was_member, is_member = result
 
-    # Let's check who is responsible for the change
+    # Get the name of the user responsible for the change
     cause_name = update.effective_user.full_name
 
-    # Handle chat types differently:
+    # Handle chat types differently
     chat = update.effective_chat
     if chat.type == Chat.PRIVATE:
         if not was_member and is_member:
-            # This may not be really needed in practice because most clients will automatically
-            # send a /start command after the user unblocks the bot, and start_private_chat()
-            # will add the user to "user_ids".
-            # We're including this here for the sake of the example.
+            # Log when user unblocks the bot
             logger.info("%s unblocked the bot", cause_name)
             context.bot_data.setdefault("user_ids", set()).add(chat.id)
         elif was_member and not is_member:
+            # Log when user blocks the bot
             logger.info("%s blocked the bot", cause_name)
             context.bot_data.setdefault("user_ids", set()).discard(chat.id)
     elif chat.type in [Chat.GROUP, Chat.SUPERGROUP]:
         if not was_member and is_member:
+            # Log when bot is added to group
             logger.info("%s added the bot to the group %s", cause_name, chat.title)
             context.bot_data.setdefault("group_ids", set()).add(chat.id)
         elif was_member and not is_member:
+            # Log when bot is removed from group
             logger.info("%s removed the bot from the group %s", cause_name, chat.title)
             context.bot_data.setdefault("group_ids", set()).discard(chat.id)
     elif not was_member and is_member:
+        # Log when bot is added to channel
         logger.info("%s added the bot to the channel %s", cause_name, chat.title)
         context.bot_data.setdefault("channel_ids", set()).add(chat.id)
     elif was_member and not is_member:
+        # Log when bot is removed from channel
         logger.info("%s removed the bot from the channel %s", cause_name, chat.title)
         context.bot_data.setdefault("channel_ids", set()).discard(chat.id)
 
@@ -170,26 +178,22 @@ async def start_private_chat(update: Update, context: ContextTypes.DEFAULT_TYPE)
         user = update.effective_user
         chat = update.effective_chat
         language_code = user.language_code if user.language_code in SUPPORTED_LANGUAGES else "en"
-        
-        # Check if it's a private chat and user's status
-        if chat.type != Chat.PRIVATE or chat.id in context.bot_data.get("user_ids", set()):
-            await update.message.reply_text(
-                message_text(
-                    language_code=language_code,
-                    message=start_page,
-                    context={"user": user, "github_repo": GITHUB_REPO}
-                ),
-                parse_mode=constants.ParseMode.MARKDOWN
-            )
-            return
-        
-        logger.info("%s started a private chat with the bot", user.full_name)
-        
+
+        if context.user_data.get("language"):
+            if chat.type != Chat.PRIVATE or chat.id in context.bot_data.get("user_ids", set()):
+                await update.message.reply_text(
+                    message_text(
+                        language_code=language_code,
+                        message=start_page,
+                        context={"user": user, "github_repo": GITHUB_REPO}
+                    ),
+                    parse_mode=constants.ParseMode.MARKDOWN
+                )
+                return
         # Record chat start time
         current_datetime = datetime.now()
         start_date = current_datetime.strftime('%Y-%m-%d')
         start_time = current_datetime.strftime('%H:%M')
-        
         # Record chat start time in context bot data
         context.bot_data.setdefault("user_ids", {}).setdefault(chat.id, {}).update({
             "start_date": start_date,
@@ -241,6 +245,9 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
     Records user message counts.
     """
     try:
+        if not context.user_data.get("language"):
+            await update.message.reply_text("⚠️Please finish setting your language first, use /start")
+            return
         # Import necessary modules for message processing
         from mistralai.async_client import MistralAsyncClient
         from mistralai.models.chat_completion import ChatMessage
@@ -299,6 +306,10 @@ async def handle_message_wrapper(update: Update, context: CallbackContext) -> No
 
 async def handle_photo_messages(update: Update, context: CallbackContext) -> None:
     try:
+        if not context.user_data.get("language"):
+            await update.message.reply_text("⚠️Please finish setting your language first, use /start")
+            return
+        
         photo_file = await update.message.photo[-1].get_file()
         photo_bytes = BytesIO(await photo_file.download_as_bytearray())
         message = {
