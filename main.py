@@ -219,10 +219,19 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
                 edited_text += content
                 if len(edited_text) % 50 == 0:
                     await text.edit_text(edited_text)
+        
+        current_datetime = datetime.now()
+        start_date = current_datetime.strftime('%Y-%m-%d')
+        user_id = update.effective_user.id
+        
+        user_data = context.bot_data.setdefault("user_message_counts", {}).setdefault(user_id, {})
+        user_data.setdefault(start_date, 0)
+        user_data[start_date] += 1
+        
         if edited_text:  # If there's any remaining text
             await text.edit_text(edited_text)
     except Exception as e:
-        await update.message.reply_text("Something went wrog try again later")
+        await update.message.reply_text("Something went wrong. Please try again later.")
         logger.error(f"Error handling message: {e}")
 
 async def handle_message_wrapper(update: Update, context: CallbackContext) -> None:
@@ -251,14 +260,25 @@ async def handle_photo_messages(update: Update, context: CallbackContext) -> Non
     except Exception as e:
         await handle_error(update, context, f"Error handling feedback: {e}")
 
-
 async def get_number_of_users(update: Update, context: CallbackContext):
     try:
-        if context.bot_data["user_ids"]:
-            await update.message.reply_text(str(context.bot_data["user_ids"]))
+        # Get the current date
+        current_date = datetime.now().strftime('%Y-%m-%d')
+        
+        # Get the number of total users
+        total_users = len(context.bot_data.get("user_ids", {}).keys())
+        
+        # Get the total number of messages handled today
+        total_messages_today = sum(user_count.get(current_date, 0) for user_count in context.bot_data.get("user_message_counts", {}).values())
+
+        # Count the number of active users today
+        active_users_today = sum(1 for user_count in context.bot_data.get("user_message_counts", {}).values() if current_date in user_count)
+        
+        # Send information about today's active users and handled messages
+        await update.message.reply_text(f"Number of total users: {total_users}\nNumber of active users today: {active_users_today}\nTotal messages handled today: {total_messages_today}")
     except Exception as e:
         await update.message.reply_text(str(e))
-
+        
 def main() -> None:
     """Start the bot."""
     # Create the Application and pass it your bot's token.
