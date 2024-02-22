@@ -27,28 +27,27 @@ from telegram.ext import (
 from utils import message_text, keyboard_layout
 from bot_conv import bot_greeting, lang_config, start_page, continue_text
 from datetime import datetime
+import json
 
 # Enable logging
-
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
 # set higher logging level for httpx to avoid all GET and POST requests being logged
 logging.getLogger("httpx").setLevel(logging.WARNING)
-
 logger = logging.getLogger(__name__)
 
-
-TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+# Load environment variables
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") 
 SUPPORTED_LANGUAGES = ['en', 'ru', 'fr']
 GITHUB_REPO = "https://github.com/RusaUB/BriefifyBot"
 ADMIN_ID = os.environ.get("TELEGRAM_ADMIN_ID")
 
+# Initialize Mistral client and model
 api_key = os.environ["MISTRAL_API_KEY"]
 model = "mistral-tiny"
 
-MAX_USAGE = 1
 
 async def handle_error(update, context, error_message):
     """
@@ -58,7 +57,8 @@ async def handle_error(update, context, error_message):
     logger.error(error_message)
 
 def extract_status_change(chat_member_update: ChatMemberUpdated) -> Optional[Tuple[bool, bool]]:
-    """Takes a ChatMemberUpdated instance and extracts whether the 'old_chat_member' was a member
+    """
+    Takes a ChatMemberUpdated instance and extracts whether the 'old_chat_member' was a member
     of the chat and whether the 'new_chat_member' is a member of the chat. Returns None, if
     the status didn't change.
     """
@@ -122,16 +122,19 @@ async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def show_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Shows which chats the bot is in"""
-    user_ids = ", ".join(str(uid) for uid in context.bot_data.setdefault("user_ids", set()))
-    group_ids = ", ".join(str(gid) for gid in context.bot_data.setdefault("group_ids", set()))
-    channel_ids = ", ".join(str(cid) for cid in context.bot_data.setdefault("channel_ids", set()))
-    text = (
-        f"@{context.bot.username} is currently in a conversation with the user IDs {user_ids}."
-        f" Moreover it is a member of the groups with IDs {group_ids} "
-        f"and administrator in the channels with IDs {channel_ids}."
-    )
-    await update.effective_message.reply_text(text)
+    try:
+        """Shows which chats the bot is in"""
+        user_ids = ", ".join(str(uid) for uid in context.bot_data.setdefault("user_ids", set()))
+        group_ids = ", ".join(str(gid) for gid in context.bot_data.setdefault("group_ids", set()))
+        channel_ids = ", ".join(str(cid) for cid in context.bot_data.setdefault("channel_ids", set()))
+        text = (
+            f"@{context.bot.username} is currently in a conversation with the user IDs {user_ids}."
+            f" Moreover it is a member of the groups with IDs {group_ids} "
+            f"and administrator in the channels with IDs {channel_ids}."
+        )
+        await update.effective_message.reply_text(text)
+    except Exception as e:
+        await handle_error(update, context, f"Error showing chats: {e}")
 
 
 async def greet_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -157,69 +160,120 @@ async def greet_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def start_private_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Start command handler. Handles the /start command.
+    Start command handler. Handles the /start command. 
+    Extracts user, chat, and language info from the update.
+    Checks if it's a private chat and user's status.
+    Records chat start time, generates language keyboard, sends greeting.
     """
-    user = update.effective_user
-    chat = update.effective_chat
-    language_code = user.language_code if user.language_code in SUPPORTED_LANGUAGES else "en"
-    
-    if chat.type != Chat.PRIVATE or chat.id in context.bot_data.get("user_ids", set()):
+    try:
+        # Extract user, chat, and language info from the update
+        user = update.effective_user
+        chat = update.effective_chat
+        language_code = user.language_code if user.language_code in SUPPORTED_LANGUAGES else "en"
+        
+        # Check if it's a private chat and user's status
+        if chat.type != Chat.PRIVATE or chat.id in context.bot_data.get("user_ids", set()):
+            await update.message.reply_text(
+                message_text(
+                    language_code=language_code,
+                    message=start_page,
+                    context={"user": user, "github_repo": GITHUB_REPO}
+                ),
+                parse_mode=constants.ParseMode.MARKDOWN
+            )
+            return
+        
+        logger.info("%s started a private chat with the bot", user.full_name)
+        
+        # Record chat start time
+        current_datetime = datetime.now()
+        start_date = current_datetime.strftime('%Y-%m-%d')
+        start_time = current_datetime.strftime('%H:%M')
+        
+        # Record chat start time in context bot data
+        context.bot_data.setdefault("user_ids", {}).setdefault(chat.id, {}).update({
+            "start_date": start_date,
+            "start_time": start_time
+        })
+        
+        keyboard = keyboard_layout(language_code, SUPPORTED_LANGUAGES, lang_config, continue_text)
+        
         await update.message.reply_text(
+            message_text(language_code, bot_greeting, context={"user": user}),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except Exception as e:
+        await handle_error(update, context, f"Error starting private chat: {e}")
+
+async def handle_language_selection(update: Update, context: CallbackContext) -> None:
+    """
+    Handles the user's language selection from the language selection keyboard.
+    """
+    try:
+        # Extract the callback query and acknowledge it
+        query = update.callback_query
+        await query.answer()
+        
+        # Extract the selected language choice from the callback data
+        lang_choice = query.data
+        
+        # Store the selected language choice in user data
+        context.user_data["language"] = lang_choice
+        
+        # Update the message with the selected language and provide a confirmation message
+        await query.message.edit_text(
             message_text(
-                language_code=language_code,
+                language_code=lang_choice,
                 message=start_page,
-                context={"user": user, "github_repo": GITHUB_REPO}
+                context={"user": update.effective_user.full_name, "github_repo": GITHUB_REPO}
             ),
             parse_mode=constants.ParseMode.MARKDOWN
         )
-        return
-    
-    logger.info("%s started a private chat with the bot", user.full_name)
-    
-    current_datetime = datetime.now()
-    start_date = current_datetime.strftime('%Y-%m-%d')
-    start_time = current_datetime.strftime('%H:%M')
-    
-    context.bot_data.setdefault("user_ids", {}).setdefault(chat.id, {}).update({
-        "start_date": start_date,
-        "start_time": start_time
-    })
-    
-    keyboard = keyboard_layout(language_code, SUPPORTED_LANGUAGES, lang_config, continue_text)
-    
-    await update.message.reply_text(
-        message_text(language_code, bot_greeting, context={"user": user}),
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-async def handle_language_selection(update: Update, context: CallbackContext) -> None:
-    query = update.callback_query
-    await query.answer()
-    lang_choice = query.data
-    context.user_data["language"] = lang_choice
-    await query.message.edit_text(message_text(language_code=lang_choice,message=start_page, context={"user":update.effective_user.full_name, "github_repo": GITHUB_REPO}), parse_mode=constants.ParseMode.MARKDOWN)
+    except Exception as e:
+        # Handle any errors that may occur
+        await handle_error(update, context, f"Error handling language selection: {e}")
 
 async def handle_message(update: Update, context: CallbackContext) -> None:
+    """
+    Handles incoming messages from users.
+    Processes user messages using MistralAI.
+    Updates messages with processed text.
+    Records user message counts.
+    """
     try:
+        # Import necessary modules for message processing
         from mistralai.async_client import MistralAsyncClient
         from mistralai.models.chat_completion import ChatMessage
 
+        # Initialize MistralAsyncClient with the provided API key
         client = MistralAsyncClient(api_key=api_key)
 
-        # Initialize the text with an empty string
+        # Initialize an empty string to hold the edited text
         edited_text = ""
-        # Send the initial text
+
+        # Send initial response indicating processing is underway
         text = await update.message.reply_text("🤖💬...")
+
+        # Prepare the user's message for processing by Mistral
         messages = [ChatMessage(role="user", content=update.message.text)]
+
+        # Start the async chat stream with Mistral
         async_response = client.chat_stream(model=model, messages=messages)
-        # Iterate over the parts received from ollama
+
+        # Iterate over the parts received from Mistral
         async for chunk in async_response:
-            content = chunk.choices[0].delta.content  # Remove leading/trailing whitespace
-            if content:  # Check if content is not empty
+            # Extract content from the chunk
+            content = chunk.choices[0].delta.content 
+
+            # Check if content is not empty
+            if content:
                 edited_text += content
+
+                # Update the message with the edited text in chunks of 50 characters
                 if len(edited_text) % 50 == 0:
                     await text.edit_text(edited_text)
         
+        # Record the date of the user's message and increment the user's message count
         current_datetime = datetime.now()
         start_date = current_datetime.strftime('%Y-%m-%d')
         user_id = update.effective_user.id
@@ -228,14 +282,20 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
         user_data.setdefault(start_date, 0)
         user_data[start_date] += 1
         
-        if edited_text:  # If there's any remaining text
+        # If there's any remaining edited text, update the message
+        if edited_text:
             await text.edit_text(edited_text)
     except Exception as e:
-        await update.message.reply_text("Something went wrong. Please try again later.")
-        logger.error(f"Error handling message: {e}")
+        # Handle any errors that may occur
+        await handle_error(update, context, f"Error handling message: {e}")
+
 
 async def handle_message_wrapper(update: Update, context: CallbackContext) -> None:
-    asyncio.create_task(handle_message(update, context))  # Вызовите вашу функцию handle_message асинхронно
+    """
+    Wraps the handle_message function in an asynchronous task for execution.
+    """
+    asyncio.create_task(handle_message(update, context))
+
 
 async def handle_photo_messages(update: Update, context: CallbackContext) -> None:
     try:
@@ -278,25 +338,87 @@ async def get_number_of_users(update: Update, context: CallbackContext):
         await update.message.reply_text(f"Number of total users: {total_users}\nNumber of active users today: {active_users_today}\nTotal messages handled today: {total_messages_today}")
     except Exception as e:
         await update.message.reply_text(str(e))
+
+async def collect_feedback(update: Update, context: CallbackContext) -> None:
+    """
+    Command handler to collect feedback from users.
+    """
+    try:
+        # Extract the feedback message from the command
+        feedback_message = " ".join(context.args)
+        # Store the anonymized feedback in bot data
         
+        #check if feedback is not empty
+        if feedback_message != "":
+            context.bot_data.setdefault("feedbacks", []).append(feedback_message)
+            await update.message.reply_text("Thank you for your feedback!")
+        else :
+            await update.message.reply_text("Please provide a feedback message.")
+            return
+    except Exception as e:
+        await handle_error(update, context, f"Error collecting feedback: {e}")
+
+async def export_data(update: Update, context: CallbackContext) -> None:
+    try:
+        # Prepare data for export
+        bot_data = context.bot_data
+        user_data = context.user_data
+        
+        # Serialize bot data and user data to JSON
+        bot_data_json = json.dumps(bot_data, indent=4)
+        user_data_json = json.dumps(user_data, indent=4)
+        
+        # Write JSON data to BytesIO buffer
+        with BytesIO() as buffer:
+            buffer.write("Bot Data:\n".encode())
+            buffer.write(bot_data_json.encode())
+            buffer.write("\n\nUser Data:\n".encode())
+            buffer.write(user_data_json.encode())
+
+            # Include feedback data if available
+            if "feedbacks" in context.bot_data:
+                feedbacks_json = json.dumps(context.bot_data["feedbacks"], indent=4)
+                buffer.write("\n\nFeedback Data:\n".encode())
+                buffer.write(feedbacks_json.encode())
+
+            buffer.seek(0)
+            
+            # Send the JSON file as a document to the user
+            await update.message.reply_document(buffer, filename="data_export.json")
+    except Exception as e:
+        await update.message.reply_text("Error exporting data: {}".format(e))
+
 def main() -> None:
-    """Start the bot."""
     # Create the Application and pass it your bot's token.
     application = Application.builder().token(TOKEN).build()
 
-
-    application.add_handler(ChatMemberHandler(track_chats, ChatMemberHandler.MY_CHAT_MEMBER))
-    application.add_handler(CommandHandler("show_chats", show_chats))
-
-    application.add_handler(ChatMemberHandler(greet_chat_members, ChatMemberHandler.CHAT_MEMBER))
-
+    # Add a handler for the /start command to greet new users when they first start using the bot
+    # Ask the user to select a language
     application.add_handler(CommandHandler("start", start_private_chat))
+
+    # Add a handler for the /feedback command
+    application.add_handler(CommandHandler("feedback", collect_feedback))
+
+    # Add a handler for the language selection
     application.add_handler(CallbackQueryHandler(handle_language_selection))
+
+    # Add a handler for messages
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message_wrapper))
+
+    # Add a handler for photo messages
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo_messages))
 
+    # Add a handler for chat member updates
+    application.add_handler(ChatMemberHandler(track_chats, ChatMemberHandler.MY_CHAT_MEMBER))
+    application.add_handler(ChatMemberHandler(greet_chat_members, ChatMemberHandler.CHAT_MEMBER))
 
+    # Commands that are executed only if the user is an administrator:
+    # 1. /admin - Get the number of users in the chat with the bot and the total number of messages handled today
+    # 2. /admin_export_data - Export the data of the bot to a JSON file
+    # 3. /show_chats - Show which chats the bot is in and how many users are in each
     application.add_handler(CommandHandler(command="admin",filters=filters.User(int(ADMIN_ID)), callback=get_number_of_users))
+    application.add_handler(CommandHandler(command="admin_export_data",filters=filters.User(int(ADMIN_ID)), callback=export_data))
+    application.add_handler(CommandHandler("show_chats", show_chats,filters=filters.User(int(ADMIN_ID))))
 
     # Run the bot until the user presses Ctrl-C
     # We pass 'allowed_updates' handle *all* updates including `chat_member` updates
@@ -304,5 +426,6 @@ def main() -> None:
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
+# Run the bot in the main function
 if __name__ == "__main__":
     main()
