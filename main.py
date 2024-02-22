@@ -2,6 +2,7 @@ import asyncio
 import logging
 from typing import Optional, Tuple
 import os 
+from time import time
 import ollama
 from io import BytesIO
 from telegram import (
@@ -23,6 +24,7 @@ from telegram.ext import (
     filters,
     CallbackContext,
     CallbackQueryHandler,
+    ApplicationHandlerStop
 )
 from utils import message_text, keyboard_layout
 from bot_conv import bot_greeting, lang_config, start_page, continue_text
@@ -47,6 +49,10 @@ ADMIN_ID = os.environ.get("TELEGRAM_ADMIN_ID")
 # Initialize Mistral client and model
 api_key = os.environ["MISTRAL_API_KEY"]
 model = "mistral-tiny"
+
+# Restriction settings
+MAX_USAGE = 1 # 1 request
+RATE_INTERVAL = 5 # 5 minutes
 
 
 async def handle_error(update, context, error_message):
@@ -249,6 +255,26 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
             await update.message.reply_text("⚠️Please finish setting your language first, use /start")
             return
         # Import necessary modules for message processing
+        count = context.user_data.get("usageCount", 0) 
+        restrict_since = context.user_data.get("restrictSince", 0)
+        if restrict_since:
+            time_left = (restrict_since + 60 * 5) - time()  # Calculate time left for restriction to expire
+            if time_left <= 0:  # If time left is negative, remove restriction
+                del context.user_data["restrictSince"]
+                del context.user_data["usageCount"]
+                await update.message.reply_text("I have unrestricted you. Please behave well.") 
+            else:
+                minutes_left = int(time_left / 60)  # Convert remaining seconds to minutes
+                await update.message.reply_text(f"Back off! Wait for your restriction to expire... Remaining time: {minutes_left} minutes")
+                raise ApplicationHandlerStop
+        else:
+            if count == MAX_USAGE:
+                context.user_data["restrictSince"] = time()
+                await update.message.reply_text("⚠️ You've used up all your free requests. Please wait for 5 minutes before trying again.") #print the remaining time
+                raise ApplicationHandlerStop
+            else:
+                context.user_data["usageCount"] = count + 1
+                # Import necessary modules for message processing
         from mistralai.async_client import MistralAsyncClient
         from mistralai.models.chat_completion import ChatMessage
 
@@ -293,7 +319,6 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
         if edited_text:
             await text.edit_text(edited_text)
     except Exception as e:
-        # Handle any errors that may occur
         await handle_error(update, context, f"Error handling message: {e}")
 
 
