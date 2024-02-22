@@ -27,7 +27,7 @@ from telegram.ext import (
     ApplicationHandlerStop
 )
 from utils import message_text, keyboard_layout
-from bot_conv import bot_greeting, lang_config, start_page, continue_text
+from bot_conv import *
 from datetime import datetime
 import json
 
@@ -51,15 +51,15 @@ api_key = os.environ["MISTRAL_API_KEY"]
 model = "mistral-tiny"
 
 # Restriction settings
-MAX_USAGE = 1 # 1 request
-RATE_INTERVAL = 5 # 5 minutes
+MAX_USAGE = 30 # 30 messages
+RATE_INTERVAL = 60 # 60 minutes
 
-
-async def handle_error(update, context, error_message):
+async def handle_error(update, context, error_message, reply = True):
     """
     Handles errors by sending a generic error message and logging the error.
     """
-    await update.message.reply_text("Something went wrong. Please try again later.")
+    if reply:
+        await update.message.reply_text("Something went wrong. Please try again later.")
     logger.error(error_message)
 
 def extract_status_change(chat_member_update: ChatMemberUpdated) -> Optional[Tuple[bool, bool]]:
@@ -252,7 +252,10 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
     """
     try:
         if not context.user_data.get("language"):
-            await update.message.reply_text("⚠️Please finish setting your language first, use /start")
+            await update.message.reply_text(message_text(
+                language_code=context.user_data.get("language", update.effective_user.language_code if update.effective_user.language_code in SUPPORTED_LANGUAGES else "en"),
+                message=skipped_start_command
+            ))
             return
         # Import necessary modules for message processing
         count = context.user_data.get("usageCount", 0) 
@@ -262,15 +265,23 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
             if time_left <= 0:  # If time left is negative, remove restriction
                 del context.user_data["restrictSince"]
                 del context.user_data["usageCount"]
-                await update.message.reply_text("I have unrestricted you. Please behave well.") 
+                await update.message.reply_text(message_text(
+                    language_code=context.user_data["language"],
+                    message=restriction_end_message
+                )) 
             else:
-                minutes_left = int(time_left / 60)  # Convert remaining seconds to minutes
-                await update.message.reply_text(f"Back off! Wait for your restriction to expire... Remaining time: {minutes_left} minutes")
+                await update.message.reply_text(message_text(
+                    language_code=context.user_data["language"],
+                    message=restriction_message
+                )) 
                 raise ApplicationHandlerStop
         else:
             if count == MAX_USAGE:
                 context.user_data["restrictSince"] = time()
-                await update.message.reply_text("⚠️ You've used up all your free requests. Please wait for 5 minutes before trying again.") #print the remaining time
+                await update.message.reply_text(message_text(
+                    language_code=context.user_data["language"],
+                    message=restriction_message
+                )) 
                 raise ApplicationHandlerStop
             else:
                 context.user_data["usageCount"] = count + 1
@@ -319,7 +330,7 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
         if edited_text:
             await text.edit_text(edited_text)
     except Exception as e:
-        await handle_error(update, context, f"Error handling message: {e}")
+        await handle_error(update, context, f"Error handling message: {e}", reply=False)
 
 
 async def handle_message_wrapper(update: Update, context: CallbackContext) -> None:
@@ -332,7 +343,10 @@ async def handle_message_wrapper(update: Update, context: CallbackContext) -> No
 async def handle_photo_messages(update: Update, context: CallbackContext) -> None:
     try:
         if not context.user_data.get("language"):
-            await update.message.reply_text("⚠️Please finish setting your language first, use /start")
+            await update.message.reply_text(message_text(
+                language_code=context.user_data.get("language", update.effective_user.language_code if update.effective_user.language_code in SUPPORTED_LANGUAGES else "en"),
+                message=skipped_start_command
+            ))
             return
         
         photo_file = await update.message.photo[-1].get_file()
@@ -430,7 +444,7 @@ def main() -> None:
 
     # Add a handler for the /start command to greet new users when they first start using the bot
     # Ask the user to select a language
-    application.add_handler(CommandHandler("start", start_private_chat))
+    application.add_handler(CommandHandler(["start","help"], start_private_chat))
 
     # Add a handler for the /feedback command
     application.add_handler(CommandHandler("feedback", collect_feedback))
@@ -440,6 +454,7 @@ def main() -> None:
 
     # Add a handler for messages
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message_wrapper))
+    application.add_handler(MessageHandler(filters.ALL & (~filters.PHOTO) & (~filters.TEXT | filters.COMMAND), start_private_chat))
 
     # Add a handler for photo messages
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo_messages))
